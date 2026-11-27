@@ -18,8 +18,22 @@ jobs:
     container: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
+      # Reglas usadas:
+      #   p/default        -> reglas generales de seguridad de Semgrep
+      #   p/owasp-top-ten  -> reglas enfocadas en el OWASP Top 10
+      #   semgrep-rules/   -> reglas propias del equipo (ej. inyección SQL)
+      # Regla excluida (decisión de triage):
+      #   CSRF: la API no usa cookies de sesión, así que este riesgo no aplica.
+      # Solo se escanea la carpeta app/ (el código de la aplicación).
       - name: Escanear código con Semgrep
-        run: semgrep scan --config p/default --error --json-output=semgrep.json .
+        run: |
+          semgrep scan \
+            --config p/default \
+            --config p/owasp-top-ten \
+            --config semgrep-rules/ \
+            --exclude-rule javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage \
+            --error --json-output=semgrep.json \
+            app/
       - name: Guardar reporte
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,14 +67,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Escanear dependencias con Trivy
         run: |
+          # 1. Escanea y guarda el reporte completo (para Claude en la tarea B2)
           docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.1 \
-            fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+            fs --scanners vuln --severity HIGH,CRITICAL \
             --format json --output /src/trivy.json /src/app
-      - name: Mostrar resultado
-        if: always()
-        run: |
+          # 2. Muestra la tabla de resultados directamente en el log
           docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.1 \
-            convert --format table /src/trivy.json || true
+            convert --format table /src/trivy.json
+          # 3. Falla el check si hay vulnerabilidades HIGH o CRITICAL
+          total=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy.json)
+          echo "Vulnerabilidades HIGH/CRITICAL encontradas: $total"
+          if [ "$total" -gt 0 ]; then exit 1; fi
       - name: Guardar reporte
         if: always()
         uses: actions/upload-artifact@v4
